@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"machine"
 	"time"
 )
@@ -30,12 +31,12 @@ type Ili948x struct {
 	height   uint16      // tft pixel height
 	rot      Rotation    // tft orientation
 	mirror   bool        // mirror tft output
+	bgr      bool        // tft blue-green-red mode
 	x0, x1   uint16      // current address window for
 	y0, y1   uint16      //  CMD_PASET and CMD_CASET
 }
 
-func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte,
-	width, height uint16, rot Rotation, mirror bool) *Ili948x {
+func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte, width, height uint16) *Ili948x {
 
 	if width == 0 {
 		width = TFT_DEFAULT_WIDTH
@@ -53,7 +54,8 @@ func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte,
 		width:    width,
 		height:   height,
 		rot:      Rot_0,
-		mirror:   mirror,
+		mirror:   false,
+		bgr:      false,
 		x0:       0,
 		x1:       0,
 		y0:       0,
@@ -92,8 +94,7 @@ func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte,
 		time.Sleep(time.Millisecond * 150)
 	}
 
-	disp.initIli948x()
-	disp.SetRotation(rot)
+	disp.init()
 
 	if bl != machine.NoPin {
 		bl.High() // display on
@@ -151,12 +152,44 @@ func (disp *Ili948x) FillRectangle(x, y, width, height uint16, color uint32) err
 	disp.writeCmdRepeat(
 		CMD_RAMWR,
 		[]byte{
-			uint8(color >> 16),
-			uint8(color >> 8),
-			uint8(color)},
+			uint8(color),        // B
+			uint8(color >> 8),   // G
+			uint8(color >> 16)}, // R
 		uint32(width)*uint32(height))
 
 	return nil
+}
+
+// DisplayBitmap renders the streamed image at given coordinates and dimensions.
+func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.Reader) error {
+	w, h := disp.Size()
+	if x >= w || (x+width) > w || y >= h || (y+height) > h {
+		return errors.New("rectangle coordinates outside display area")
+	}
+	disp.setWindow(x, y, width, height)
+
+	disp.writeCmd(CMD_RAMWR, nil)
+	buf := make([]byte, width*uint16(bpp/3))
+	for {
+		n, err := r.Read(buf)
+		disp.writeData(buf)
+		if n == 0 || err == io.EOF {
+			break
+		}
+	}
+
+	return nil
+}
+
+// GetBGR returns true is the display is in blue-green-red (BGR) mode.
+func (disp *Ili948x) GetBGR() bool {
+	return disp.bgr
+}
+
+// SetBGR switches the display between blue-green-red (BGR) and red-green-blue (RGB) mode.
+func (disp *Ili948x) SetBGR(bgr bool) {
+	disp.bgr = bgr
+	disp.updateMadctl()
 }
 
 // GetRotation returns the current rotation of the display.
@@ -166,8 +199,14 @@ func (disp *Ili948x) GetRotation() Rotation {
 
 // SetRotation sets the clock-wise rotation of the display.
 func (disp *Ili948x) SetRotation(rot Rotation) {
+	disp.rot = rot
+	disp.updateMadctl()
+}
+
+func (disp *Ili948x) updateMadctl() {
 	madctl := uint8(0)
-	switch rot {
+
+	switch disp.rot {
 	case Rot_0:
 		madctl = 0
 	case Rot_90:
@@ -187,10 +226,11 @@ func (disp *Ili948x) SetRotation(rot Rotation) {
 		// 	madctl = MADCTRL_MX | MADCTRL_MY | MADCTRL_MV | MADCTRL_BGR
 	}
 
-	madctl |= MADCTRL_BGR
+	if disp.bgr {
+		madctl |= MADCTRL_BGR
+	}
 
 	disp.writeCmd(CMD_MADCTRL, []byte{madctl})
-	disp.rot = rot
 }
 
 // setWindow defines the output area for subsequent calls to CMD_RAMWR
@@ -237,9 +277,11 @@ func (disp *Ili948x) writeCmd(cmd byte, data []byte) {
 
 	disp.dc.Low() // command mode
 	disp.spi.Transfer(cmd)
-
 	disp.dc.High() // data mode
-	disp.spi.Tx(data, nil)
+
+	if data != nil {
+		disp.spi.Tx(data, nil)
+	}
 
 	disp.endWrite()
 }
@@ -298,7 +340,7 @@ func (disp *Ili948x) writeData(data []byte) {
 }
 
 // ////////////////////////////////////
-func (disp *Ili948x) initIli948x() {
+func (disp *Ili948x) init() {
 	disp.writeCmd(CMD_PWCTRL1, []byte{
 		0x17,  // VREG1OUT:  5.0000
 		0x15}) // VREG2OUT: -4.8750
@@ -316,9 +358,6 @@ func (disp *Ili948x) initIli948x() {
 	disp.writeCmd(CMD_PIXFMT, []byte{
 		//		0x66}) // DPI/DBI: 18 bits / pixel
 		0x76}) // DPI/DBI: 24 bits / pixel
-
-	disp.writeCmd(CMD_MADCTRL, []byte{
-		MADCTRL_BGR}) // bgr pixel mode
 
 	disp.writeCmd(CMD_FRMCTRL1, []byte{
 		0xa0,  // FRS: 60.76  DIVA: 0
@@ -341,18 +380,11 @@ func (disp *Ili948x) initIli948x() {
 		0x2c,  //
 		0x82}) // DSI_18_option:
 
+	disp.updateMadctl()
+
 	disp.writeCmd(CMD_SLPOUT, nil)
 	time.Sleep(time.Millisecond * 120)
 	disp.writeCmd(CMD_IDMOFF, nil)
 	disp.writeCmd(CMD_DISON, nil)
 	time.Sleep(time.Millisecond * 100)
-}
-
-func dPrint(msg, key string, val uint32) {
-	print(msg)
-	print(": ")
-	print(key)
-	print(" = ")
-	print(val)
-	print("\r\n")
 }

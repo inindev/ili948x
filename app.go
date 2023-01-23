@@ -2,7 +2,11 @@ package main
 
 import (
 	"machine"
+	"os"
 	"time"
+
+	"tinygo.org/x/drivers/sdcard"
+	"tinygo.org/x/tinyfs/fatfs"
 )
 
 // https://www.w3schools.com/colors/colors_wheels.asp
@@ -63,32 +67,33 @@ func main() {
 		machine.NoPin,
 		make([]byte, 64),
 		TFT_DEFAULT_WIDTH,
-		TFT_DEFAULT_HEIGHT,
-		Rot_0,
-		false)
+		TFT_DEFAULT_HEIGHT)
 
-	//disp.screenFillDemo()
+	//disp.screenFillDemo(ryb_colors)
+	disp.screenFillDemo(cmy_colors)
 
 	//disp.quadrantDemo()
-	disp.rotateDemo(disp.quadrantDemo, 2000, 8)
+	disp.rotateDemo(disp.quadrantDemo, 1500, 4)
 
 	//disp.colorBlocksDemo()
 	disp.rotateDemo(disp.colorBlocksDemo, 500, 8)
 
 	//disp.stackedRectanglesDemo()
-	disp.rotateDemo(disp.stackedRectanglesDemo, 1200, 6)
+	disp.rotateDemo(disp.stackedRectanglesDemo, 1500, 6)
+
+	disp.SetRotation(Rot_90)
+	disp.bitmapDemo("/logo.bmp")
+	time.Sleep(time.Second)
+	disp.SetRotation(Rot_270)
+	disp.bitmapDemo("/logo.bmp")
 
 	for {
 		time.Sleep(time.Minute)
 	}
 }
 
-func (disp *Ili948x) screenFillDemo() {
-	for _, color := range ryb_colors {
-		disp.FillScreen(color)
-		time.Sleep(time.Millisecond * 1000)
-	}
-	for _, color := range cmy_colors {
+func (disp *Ili948x) screenFillDemo(palette []uint32) {
+	for _, color := range palette {
 		disp.FillScreen(color)
 		time.Sleep(time.Millisecond * 1000)
 	}
@@ -120,12 +125,12 @@ func (disp *Ili948x) colorBlocksDemo() {
 		{0xeaecee, 0xd5d8dc, 0xabb2b9, 0x808b96, 0x566573, 0x2c3e50, 0x273746, 0x212f3d, 0x1c2833, 0x17202a}, // steel
 	}
 
-	dwidth, dheight := disp.Size()
-	bwidth := dwidth / uint16(10)
-	bheight := dheight / uint16(10)
+	width, height := disp.Size()
+	bw := width / uint16(10)
+	bh := height / uint16(10)
 	for x := uint16(0); x < 10; x++ {
 		for y := uint16(0); y < 10; y++ {
-			disp.FillRectangle(x*bwidth, y*bheight, bwidth, bheight, palette[x][y])
+			disp.FillRectangle(x*bw, y*bh, bw, bh, palette[x][y])
 		}
 	}
 }
@@ -149,10 +154,50 @@ func (disp *Ili948x) stackedRectanglesDemo() {
 	disp.FillRectangle(width/4, height/4, width/2, height/2, CMT) // middle
 }
 
+func (disp *Ili948x) bitmapDemo(filename string) {
+	sd := sdcard.New(&machine.SPI2, machine.SD_SCK_PIN, machine.SD_SDO_PIN, machine.SD_SDI_PIN, machine.SD_CS_PIN)
+	err := sd.Configure()
+	if err != nil {
+		printError("failed to bind sdcard device", "", err)
+		return
+	}
+
+	filesystem := fatfs.New(&sd)
+	filesystem.Configure(&fatfs.Config{
+		SectorSize: 512,
+	})
+
+	f, err := filesystem.OpenFile(filename, os.O_RDONLY)
+	if err != nil {
+		printError("could not open file", filename, err)
+		return
+	}
+	defer f.Close()
+
+	// https://en.wikipedia.org/wiki/BMP_file_format
+	header := make([]byte, 54)
+	f.Read(header)
+	//print(hex.Dump(header))
+
+	width, height := disp.Size()
+	disp.DisplayBitmap(0, 0, width, height, 24, f)
+}
+
 func (disp *Ili948x) rotateDemo(pfunc func(), delayMs time.Duration, count int) {
 	for i := 0; i < count; i++ {
 		disp.SetRotation(Rotation(i % 4))
 		pfunc()
 		time.Sleep(time.Millisecond * delayMs)
 	}
+}
+
+func printError(msg, key string, err error) {
+	print(msg)
+	if key != "" {
+		print(" ")
+		print(key)
+	}
+	print(" - error: ")
+	print(err.Error())
+	print("\r\n")
 }
