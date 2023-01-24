@@ -181,17 +181,6 @@ func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.R
 	return nil
 }
 
-// GetBGR returns true is the display is in blue-green-red (BGR) mode.
-func (disp *Ili948x) GetBGR() bool {
-	return disp.bgr
-}
-
-// SetBGR switches the display between blue-green-red (BGR) and red-green-blue (RGB) mode.
-func (disp *Ili948x) SetBGR(bgr bool) {
-	disp.bgr = bgr
-	disp.updateMadctl()
-}
-
 // GetRotation returns the current rotation of the display.
 func (disp *Ili948x) GetRotation() Rotation {
 	return disp.rot
@@ -203,27 +192,55 @@ func (disp *Ili948x) SetRotation(rot Rotation) {
 	disp.updateMadctl()
 }
 
+// GetMirror returns true if the display set to display a mirrored image.
+func (disp *Ili948x) GetMirror() bool {
+	return disp.mirror
+}
+
+// SetMirror switches the display between mirrored image and non-mirrored image mode.
+func (disp *Ili948x) SetMirror(mirror bool) {
+	disp.mirror = mirror
+	disp.updateMadctl()
+}
+
+// GetBGR returns true if the display is in blue-green-red (BGR) mode.
+func (disp *Ili948x) GetBGR() bool {
+	return disp.bgr
+}
+
+// SetBGR switches the display between blue-green-red (BGR) and red-green-blue (RGB) mode.
+func (disp *Ili948x) SetBGR(bgr bool) {
+	disp.bgr = bgr
+	disp.updateMadctl()
+}
+
 func (disp *Ili948x) updateMadctl() {
 	madctl := uint8(0)
 
-	switch disp.rot {
-	case Rot_0:
-		madctl = 0
-	case Rot_90:
-		madctl = MADCTRL_MV | MADCTRL_MX | MADCTRL_MH
-	case Rot_180:
-		madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML
-	case Rot_270:
-		madctl = MADCTRL_MV | MADCTRL_MY | MADCTRL_ML
-
-		// case Rotation0Mirror:
-		// 	madctl = MADCTRL_BGR
-		// case Rotation90Mirror:
-		// 	madctl = MADCTRL_MY | MADCTRL_MV | MADCTRL_BGR
-		// case Rotation180Mirror:
-		// 	madctl = MADCTRL_MX | MADCTRL_MY | MADCTRL_BGR
-		// case Rotation270Mirror:
-		// 	madctl = MADCTRL_MX | MADCTRL_MY | MADCTRL_MV | MADCTRL_BGR
+	if !disp.mirror {
+		// regular
+		switch disp.rot {
+		case Rot_0:
+			madctl = MADCTRL_MY | MADCTRL_ML
+		case Rot_90:
+			madctl = MADCTRL_MV
+		case Rot_180:
+			madctl = MADCTRL_MX | MADCTRL_MH
+		case Rot_270:
+			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML | MADCTRL_MV
+		}
+	} else {
+		// mirrored
+		switch disp.rot {
+		case Rot_0:
+			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML
+		case Rot_90:
+			madctl = MADCTRL_MV | MADCTRL_MY | MADCTRL_ML
+		case Rot_180:
+			madctl = 0
+		case Rot_270:
+			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MV
+		}
 	}
 
 	if disp.bgr {
@@ -287,7 +304,7 @@ func (disp *Ili948x) writeCmd(cmd byte, data []byte) {
 }
 
 // ////////////////////////////////////
-func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, reps uint32) {
+func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, count uint32) {
 	disp.startWrite()
 
 	disp.dc.Low() // command mode
@@ -296,8 +313,8 @@ func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, reps uint32) {
 	disp.dc.High() // data mode
 	dataBytes := uint32(len(data))
 	txBufBytes := uint32(len(disp.spiTxBuf))
-	if reps < 1 || dataBytes < 1 || txBufBytes < 1 {
-		for i := uint32(0); i < reps; i++ {
+	if count < 1 || dataBytes < 1 || txBufBytes < 1 {
+		for i := uint32(0); i < count; i++ {
 			disp.spi.Tx(data, nil)
 		}
 	} else {
@@ -307,25 +324,25 @@ func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, reps uint32) {
 			disp.spiTxBuf[i] = data[i%dataBytes]
 		}
 
-		q := reps / chunks
+		q := count / chunks
 		for i := uint32(0); i < q; i++ {
 			disp.spi.Tx(disp.spiTxBuf[:bufBytes], nil)
 		}
-		r := reps % chunks
+		r := count % chunks
 		disp.spi.Tx(disp.spiTxBuf[:r*dataBytes], nil)
 	}
 
 	disp.endWrite()
 }
 
-// func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, reps uint32) {
+// func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, count uint32) {
 // 	disp.startWrite()
 //
 // 	disp.dc.Low() // command mode
 // 	disp.spi.Transfer(cmd)
 //
 // 	disp.dc.High() // data mode
-// 	for i := uint32(0); i < reps; i++ {
+// 	for i := uint32(0); i < count; i++ {
 // 		disp.spi.Tx(data, nil)
 // 	}
 //

@@ -99,10 +99,10 @@ const ( // ILI9488 Datasheet, pp. 140-147
 )
 
 const (
-	MADCTRL_MY  uint8 = 0x80 // Address bottom to top
-	MADCTRL_MX        = 0x40 // Address right to left
-	MADCTRL_MV        = 0x20 // Mirror image
-	MADCTRL_ML        = 0x10 // Refresh bottom to top
-	MADCTRL_BGR       = 0x08 // Blue-Green-Red pixel order
-	MADCTRL_MH        = 0x04 // Refresh right to left
+	MADCTRL_MY  uint8 = 0x80 // Row Address Order         1 = address bottom to top
+	MADCTRL_MX        = 0x40 // Column Address Order      1 = address right to left
+	MADCTRL_MV        = 0x20 // Row/Column Exchange       1 = mirror and rotate 90 ccw
+	MADCTRL_ML        = 0x10 // Vertical Refresh Order    1 = refresh bottom to top
+	MADCTRL_BGR       = 0x08 // RGB-BGR Order             1 = Blue-Green-Red pixel order
+	MADCTRL_MH        = 0x04 // Horizontal Refresh Order  1 = refresh right to left
 )
