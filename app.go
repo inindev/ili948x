@@ -81,11 +81,10 @@ func main() {
 	//disp.stackedRectanglesDemo()
 	disp.rotateDemo(disp.stackedRectanglesDemo, 1500, 6)
 
-	disp.SetMirror(true)
-	disp.SetRotation(Rot_270)
+	disp.SetRotation(Rot_90)
 	disp.bitmapDemo("/logo.bmp")
 	time.Sleep(time.Second)
-	disp.SetRotation(Rot_90)
+	disp.SetRotation(Rot_270)
 	disp.bitmapDemo("/logo.bmp")
 
 	for {

@@ -172,10 +172,10 @@ func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.R
 	buf := make([]byte, width*uint16(bpp/3))
 	for {
 		n, err := r.Read(buf)
-		disp.writeData(buf)
 		if n == 0 || err == io.EOF {
 			break
 		}
+		disp.writeData(buf)
 	}
 
 	return nil
@@ -221,25 +221,25 @@ func (disp *Ili948x) updateMadctl() {
 		// regular
 		switch disp.rot {
 		case Rot_0:
-			madctl = MADCTRL_MY | MADCTRL_ML
+			madctl = 0
 		case Rot_90:
-			madctl = MADCTRL_MV
+			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MV
 		case Rot_180:
-			madctl = MADCTRL_MX | MADCTRL_MH
+			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML
 		case Rot_270:
-			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML | MADCTRL_MV
+			madctl = MADCTRL_MV | MADCTRL_MY | MADCTRL_ML
 		}
 	} else {
 		// mirrored
 		switch disp.rot {
 		case Rot_0:
-			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML
+			madctl = MADCTRL_MX | MADCTRL_MH
 		case Rot_90:
-			madctl = MADCTRL_MV | MADCTRL_MY | MADCTRL_ML
+			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML | MADCTRL_MV
 		case Rot_180:
-			madctl = 0
+			madctl = MADCTRL_MY | MADCTRL_ML
 		case Rot_270:
-			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MV
+			madctl = MADCTRL_MV
 		}
 	}
 
