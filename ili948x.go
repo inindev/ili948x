@@ -90,7 +90,7 @@ func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte, w
 		time.Sleep(time.Millisecond * 200)
 	} else {
 		// if no hardware reset, send software reset
-		disp.writeCmd(CMD_SWRESET, nil)
+		disp.writeCmd(CMD_SWRESET)
 		time.Sleep(time.Millisecond * 150)
 	}
 
@@ -168,7 +168,7 @@ func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.R
 	}
 	disp.setWindow(x, y, width, height)
 
-	disp.writeCmd(CMD_RAMWR, nil)
+	disp.writeCmd(CMD_RAMWR)
 	buf := make([]byte, width*uint16(bpp/3))
 	for {
 		n, err := r.Read(buf)
@@ -247,29 +247,29 @@ func (disp *Ili948x) updateMadctl() {
 		madctl |= MADCTRL_BGR
 	}
 
-	disp.writeCmd(CMD_MADCTRL, []byte{madctl})
+	disp.writeCmd(CMD_MADCTRL, madctl)
 }
 
 // setWindow defines the output area for subsequent calls to CMD_RAMWR
 func (disp *Ili948x) setWindow(x, y, w, h uint16) {
 	x1 := x + w - 1
 	if x != disp.x0 || x1 != disp.x1 {
-		disp.writeCmd(CMD_CASET, []byte{
-			byte(x >> 8),
+		disp.writeCmd(CMD_CASET,
+			byte(x>>8),
 			byte(x),
-			byte(x1 >> 8),
+			byte(x1>>8),
 			byte(x1),
-		})
+		)
 		disp.x0, disp.x1 = x, x1
 	}
 	y1 := y + h - 1
 	if y != disp.y0 || y1 != disp.y1 {
-		disp.writeCmd(CMD_PASET, []byte{
-			byte(y >> 8),
+		disp.writeCmd(CMD_PASET,
+			byte(y>>8),
 			byte(y),
-			byte(y1 >> 8),
+			byte(y1>>8),
 			byte(y1),
-		})
+		)
 		disp.y0, disp.y1 = y, y1
 	}
 }
@@ -289,7 +289,7 @@ func (disp *Ili948x) endWrite() {
 }
 
 // ////////////////////////////////////
-func (disp *Ili948x) writeCmd(cmd byte, data []byte) {
+func (disp *Ili948x) writeCmd(cmd byte, data ...byte) {
 	disp.startWrite()
 
 	disp.dc.Low() // command mode
@@ -358,50 +358,50 @@ func (disp *Ili948x) writeData(data []byte) {
 
 // ////////////////////////////////////
 func (disp *Ili948x) init() {
-	disp.writeCmd(CMD_PWCTRL1, []byte{
-		0x17,  // VREG1OUT:  5.0000
-		0x15}) // VREG2OUT: -4.8750
+	disp.writeCmd(CMD_PWCTRL1,
+		0x17, // VREG1OUT:  5.0000
+		0x15) // VREG2OUT: -4.8750
 
-	disp.writeCmd(CMD_PWCTRL2, []byte{
-		0x41}) // VGH: VCI x 6  VGL: -VCI x 4
+	disp.writeCmd(CMD_PWCTRL2,
+		0x41) // VGH: VCI x 6  VGL: -VCI x 4
 
-	disp.writeCmd(CMD_VMCTRL, []byte{
-		0x00,  // nVM
-		0x12,  // VCM_REG:    -1.71875
-		0x80,  // VCM_REG_EN: true
-		0x40}) // VCM_OUT
+	disp.writeCmd(CMD_VMCTRL,
+		0x00, // nVM
+		0x12, // VCM_REG:    -1.71875
+		0x80, // VCM_REG_EN: true
+		0x40) // VCM_OUT
 
 	// TODO: is this correct?
-	disp.writeCmd(CMD_PIXFMT, []byte{
+	disp.writeCmd(CMD_PIXFMT,
 		//		0x66}) // DPI/DBI: 18 bits / pixel
-		0x76}) // DPI/DBI: 24 bits / pixel
+		0x76) // DPI/DBI: 24 bits / pixel
 
-	disp.writeCmd(CMD_FRMCTRL1, []byte{
-		0xa0,  // FRS: 60.76  DIVA: 0
-		0x11}) // RTNA: 17 clocks
+	disp.writeCmd(CMD_FRMCTRL1,
+		0xa0, // FRS: 60.76  DIVA: 0
+		0x11) // RTNA: 17 clocks
 
-	disp.writeCmd(CMD_INVCTRL, []byte{
-		0x02}) // DINV: 2 dot inversion
+	disp.writeCmd(CMD_INVCTRL,
+		0x02) // DINV: 2 dot inversion
 
-	disp.writeCmd(CMD_DISCTRL, []byte{
-		0x02,  // PT: AGND
-		0x22,  // SS: S960 -> S1  ISC: 5 frames
-		0x3b}) // NL: 8 * (3b + 1) = 480 lines
+	disp.writeCmd(CMD_DISCTRL,
+		0x02, // PT: AGND
+		0x22, // SS: S960 -> S1  ISC: 5 frames
+		0x3b) // NL: 8 * (3b + 1) = 480 lines
 
-	disp.writeCmd(CMD_ETMOD, []byte{
-		0xc6}) // EPF: 11 (db5 -> r0,g0,b0)
+	disp.writeCmd(CMD_ETMOD,
+		0xc6) // EPF: 11 (db5 -> r0,g0,b0)
 
-	disp.writeCmd(CMD_ADJCTRL3, []byte{
-		0xa9,  //
-		0x51,  //
-		0x2c,  //
-		0x82}) // DSI_18_option:
+	disp.writeCmd(CMD_ADJCTRL3,
+		0xa9, //
+		0x51, //
+		0x2c, //
+		0x82) // DSI_18_option:
 
 	disp.updateMadctl()
 
-	disp.writeCmd(CMD_SLPOUT, nil)
+	disp.writeCmd(CMD_SLPOUT)
 	time.Sleep(time.Millisecond * 120)
-	disp.writeCmd(CMD_IDMOFF, nil)
-	disp.writeCmd(CMD_DISON, nil)
+	disp.writeCmd(CMD_IDMOFF)
+	disp.writeCmd(CMD_DISON)
 	time.Sleep(time.Millisecond * 100)
 }
