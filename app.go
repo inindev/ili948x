@@ -175,9 +175,22 @@ func (disp *Ili948x) bitmapDemo(filename string) {
 	defer f.Close()
 
 	// https://en.wikipedia.org/wiki/BMP_file_format
-	header := make([]byte, 54)
+	header := make([]byte, 14)
 	f.Read(header)
 	//print(hex.Dump(header))
+	if header[0] != 'B' || header[1] != 'M' {
+		printError("bitmap file is invalid", "", err)
+		return
+	}
+	img_offs := uint32(header[13] | header[12] | header[11] | header[10])
+
+	// reuse buffer to read past remaining header
+	q := img_offs / uint32(len(header))
+	for i := uint32(1); i < q; i++ {
+		f.Read(header)
+	}
+	r := img_offs % uint32(len(header))
+	f.Read(header[:r])
 
 	width, height := disp.Size()
 	disp.DisplayBitmap(0, 0, width, height, 24, f)
