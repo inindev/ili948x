@@ -182,7 +182,7 @@ func (disp *Ili948x) bitmapDemo(filename string) {
 		printError("bitmap file is invalid", "", err)
 		return
 	}
-	img_offs := uint32(header[13] | header[12] | header[11] | header[10])
+	img_offs := uint32(header[10]) | uint32(header[11])<<8 | uint32(header[12])<<16 | uint32(header[13])<<24
 
 	// reuse buffer to read past remaining header
 	q := img_offs / uint32(len(header))
