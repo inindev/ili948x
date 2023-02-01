@@ -22,22 +22,21 @@ const (
 )
 
 type Ili948x struct {
-	spi      machine.SPI // spi bus
-	cs       machine.Pin // spi chip select
-	dc       machine.Pin // tft data / command
-	bl       machine.Pin // tft backlight
-	spiTxBuf []byte      // spi tx buffer
-	width    uint16      // tft pixel width
-	height   uint16      // tft pixel height
-	rot      Rotation    // tft orientation
-	mirror   bool        // mirror tft output
-	bgr      bool        // tft blue-green-red mode
-	x0, x1   uint16      // current address window for
-	y0, y1   uint16      //  CMD_PASET and CMD_CASET
+	trans  iTransport
+	cs     machine.Pin // spi chip select
+	dc     machine.Pin // tft data / command
+	bl     machine.Pin // tft backlight
+	rs     machine.Pin // tft reset
+	width  uint16      // tft pixel width
+	height uint16      // tft pixel height
+	rot    Rotation    // tft orientation
+	mirror bool        // mirror tft output
+	bgr    bool        // tft blue-green-red mode
+	x0, x1 uint16      // current address window for
+	y0, y1 uint16      //  CMD_PASET and CMD_CASET
 }
 
-func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte, width, height uint16) *Ili948x {
-
+func NewIli9488(trans iTransport, cs, dc, bl, rs machine.Pin, width, height uint16) *Ili948x {
 	if width == 0 {
 		width = TFT_DEFAULT_WIDTH
 	}
@@ -46,20 +45,20 @@ func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte, w
 	}
 
 	disp := &Ili948x{
-		spi:      spi,
-		cs:       cs,
-		dc:       dc,
-		bl:       bl,
-		spiTxBuf: spiTxBuf,
-		width:    width,
-		height:   height,
-		rot:      Rot_0,
-		mirror:   false,
-		bgr:      false,
-		x0:       0,
-		x1:       0,
-		y0:       0,
-		y1:       0,
+		trans:  trans,
+		cs:     cs,
+		dc:     dc,
+		bl:     bl,
+		rs:     rs,
+		width:  width,
+		height: height,
+		rot:    Rot_0,
+		mirror: false,
+		bgr:    false,
+		x0:     0,
+		x1:     0,
+		y0:     0,
+		y1:     0,
 	}
 
 	// chip select pin
@@ -79,26 +78,13 @@ func NewIli9488(spi machine.SPI, cs, dc, bl, rst machine.Pin, spiTxBuf []byte, w
 	dc.High()
 
 	// reset the display
-	if rst != machine.NoPin {
-		// configure hardware reset if there is one
-		rst.Configure(machine.PinConfig{Mode: machine.PinOutput})
-		rst.High()
-		time.Sleep(time.Millisecond * 100)
-		rst.Low()
-		time.Sleep(time.Millisecond * 100)
-		rst.High()
-		time.Sleep(time.Millisecond * 200)
-	} else {
-		// if no hardware reset, send software reset
-		disp.writeCmd(CMD_SWRESET)
-		time.Sleep(time.Millisecond * 150)
-	}
+	disp.Reset()
 
+	// init display settings
 	disp.init()
 
-	if bl != machine.NoPin {
-		bl.High() // display on
-	}
+	// display backlight on
+	disp.SetBacklight(true)
 
 	return disp
 }
@@ -149,13 +135,10 @@ func (disp *Ili948x) FillRectangle(x, y, width, height uint16, color uint32) err
 	}
 	disp.setWindow(x, y, width, height)
 
-	disp.writeCmdRepeat(
-		CMD_RAMWR,
-		[]byte{
-			uint8(color),        // B
-			uint8(color >> 8),   // G
-			uint8(color >> 16)}, // R
-		uint32(width)*uint32(height))
+	disp.writeCmd(CMD_RAMWR)
+	disp.startWrite()
+	disp.trans.write24n(color, int(width)*int(height))
+	disp.endWrite()
 
 	return nil
 }
@@ -175,7 +158,10 @@ func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.R
 		if n == 0 || err == io.EOF {
 			break
 		}
-		disp.writeData(buf)
+
+		disp.startWrite()
+		disp.trans.write8sl(buf[:n])
+		disp.endWrite()
 	}
 
 	return nil
@@ -214,6 +200,56 @@ func (disp *Ili948x) SetBGR(bgr bool) {
 	disp.updateMadctl()
 }
 
+// SetBacklight turns the TFT backlight on / off.
+func (disp *Ili948x) SetBacklight(b bool) {
+	if disp.bl != machine.NoPin {
+		disp.bl.Set(b)
+	}
+}
+
+// Reset performs a hardware reset if rs pin present, otherwise performs a CMD_SWRESET software reset of the TFT display.
+func (disp *Ili948x) Reset() {
+	if disp.rs != machine.NoPin {
+		// trigger hardware reset if there is one
+		disp.rs.Configure(machine.PinConfig{Mode: machine.PinOutput})
+		disp.rs.High()
+		time.Sleep(time.Millisecond * 100)
+		disp.rs.Low()
+		time.Sleep(time.Millisecond * 100)
+		disp.rs.High()
+		time.Sleep(time.Millisecond * 200)
+	} else {
+		// if no hardware reset, send software reset
+		disp.writeCmd(CMD_SWRESET)
+		time.Sleep(time.Millisecond * 150)
+	}
+}
+
+// setWindow defines the output area for subsequent calls to CMD_RAMWR
+func (disp *Ili948x) setWindow(x, y, w, h uint16) {
+	x1 := x + w - 1
+	if x != disp.x0 || x1 != disp.x1 {
+		disp.writeCmd(CMD_CASET,
+			byte(x>>8),
+			byte(x),
+			byte(x1>>8),
+			byte(x1),
+		)
+		disp.x0, disp.x1 = x, x1
+	}
+	y1 := y + h - 1
+	if y != disp.y0 || y1 != disp.y1 {
+		disp.writeCmd(CMD_PASET,
+			byte(y>>8),
+			byte(y),
+			byte(y1>>8),
+			byte(y1),
+		)
+		disp.y0, disp.y1 = y, y1
+	}
+}
+
+// updateMadctl updates CMD_MADCTRL based settings (mirror, rotation, RGB/BGR)
 func (disp *Ili948x) updateMadctl() {
 	madctl := uint8(0)
 
@@ -250,113 +286,7 @@ func (disp *Ili948x) updateMadctl() {
 	disp.writeCmd(CMD_MADCTRL, madctl)
 }
 
-// setWindow defines the output area for subsequent calls to CMD_RAMWR
-func (disp *Ili948x) setWindow(x, y, w, h uint16) {
-	x1 := x + w - 1
-	if x != disp.x0 || x1 != disp.x1 {
-		disp.writeCmd(CMD_CASET,
-			byte(x>>8),
-			byte(x),
-			byte(x1>>8),
-			byte(x1),
-		)
-		disp.x0, disp.x1 = x, x1
-	}
-	y1 := y + h - 1
-	if y != disp.y0 || y1 != disp.y1 {
-		disp.writeCmd(CMD_PASET,
-			byte(y>>8),
-			byte(y),
-			byte(y1>>8),
-			byte(y1),
-		)
-		disp.y0, disp.y1 = y, y1
-	}
-}
-
-//go:inline
-func (disp *Ili948x) startWrite() {
-	if disp.cs != machine.NoPin {
-		disp.cs.Low()
-	}
-}
-
-//go:inline
-func (disp *Ili948x) endWrite() {
-	if disp.cs != machine.NoPin {
-		disp.cs.High()
-	}
-}
-
-// ////////////////////////////////////
-func (disp *Ili948x) writeCmd(cmd byte, data ...byte) {
-	disp.startWrite()
-
-	disp.dc.Low() // command mode
-	disp.spi.Transfer(cmd)
-	disp.dc.High() // data mode
-
-	if data != nil {
-		disp.spi.Tx(data, nil)
-	}
-
-	disp.endWrite()
-}
-
-// ////////////////////////////////////
-func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, count uint32) {
-	disp.startWrite()
-
-	disp.dc.Low() // command mode
-	disp.spi.Transfer(cmd)
-
-	disp.dc.High() // data mode
-	dataBytes := uint32(len(data))
-	txBufBytes := uint32(len(disp.spiTxBuf))
-	if count < 1 || dataBytes < 1 || txBufBytes < 1 {
-		for i := uint32(0); i < count; i++ {
-			disp.spi.Tx(data, nil)
-		}
-	} else {
-		chunks := txBufBytes / dataBytes // 64 / 3 = 21
-		bufBytes := chunks * dataBytes
-		for i := uint32(0); i < bufBytes; i++ {
-			disp.spiTxBuf[i] = data[i%dataBytes]
-		}
-
-		q := count / chunks
-		for i := uint32(0); i < q; i++ {
-			disp.spi.Tx(disp.spiTxBuf[:bufBytes], nil)
-		}
-		r := count % chunks
-		disp.spi.Tx(disp.spiTxBuf[:r*dataBytes], nil)
-	}
-
-	disp.endWrite()
-}
-
-// func (disp *Ili948x) writeCmdRepeat(cmd byte, data []byte, count uint32) {
-// 	disp.startWrite()
-//
-// 	disp.dc.Low() // command mode
-// 	disp.spi.Transfer(cmd)
-//
-// 	disp.dc.High() // data mode
-// 	for i := uint32(0); i < count; i++ {
-// 		disp.spi.Tx(data, nil)
-// 	}
-//
-// 	disp.endWrite()
-// }
-
-// ////////////////////////////////////
-func (disp *Ili948x) writeData(data []byte) {
-	disp.startWrite()
-	machine.SPI2.Tx(data, nil)
-	disp.endWrite()
-}
-
-// ////////////////////////////////////
+// init performs base-level initialization and setup of the TFT display
 func (disp *Ili948x) init() {
 	disp.writeCmd(CMD_PWCTRL1,
 		0x17, // VREG1OUT:  5.0000
@@ -404,4 +334,31 @@ func (disp *Ili948x) init() {
 	disp.writeCmd(CMD_IDMOFF)
 	disp.writeCmd(CMD_DISON)
 	time.Sleep(time.Millisecond * 100)
+}
+
+// writeCmd issues a TFT command with optional data
+func (disp *Ili948x) writeCmd(cmd byte, data ...byte) {
+	disp.startWrite()
+
+	disp.dc.Low() // command mode
+	disp.trans.write8(cmd)
+
+	disp.dc.High() // data mode
+	disp.trans.write8sl(data)
+
+	disp.endWrite()
+}
+
+//go:inline
+func (disp *Ili948x) startWrite() {
+	if disp.cs != machine.NoPin {
+		disp.cs.Low()
+	}
+}
+
+//go:inline
+func (disp *Ili948x) endWrite() {
+	if disp.cs != machine.NoPin {
+		disp.cs.High()
+	}
 }

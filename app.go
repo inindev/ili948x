@@ -60,12 +60,11 @@ func main() {
 	})
 
 	disp := NewIli9488(
-		machine.SPI2,
-		machine.TFT_CS_PIN,
-		machine.TFT_DC_PIN,
-		machine.TFT_BL_PIN,
-		machine.NoPin,
-		make([]byte, 64),
+		NewSPITransport(machine.SPI2),
+		machine.TFT_CS_PIN, // chip select
+		machine.TFT_DC_PIN, // data / command
+		machine.TFT_BL_PIN, // backlight
+		machine.NoPin,      // reset
 		TFT_DEFAULT_WIDTH,
 		TFT_DEFAULT_HEIGHT)
 
