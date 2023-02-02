@@ -153,16 +153,16 @@ func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.R
 
 	disp.writeCmd(CMD_RAMWR)
 	buf := make([]byte, width*uint16(bpp/3))
+	disp.startWrite()
 	for {
 		n, err := r.Read(buf)
 		if n == 0 || err == io.EOF {
 			break
 		}
 
-		disp.startWrite()
 		disp.trans.write8sl(buf[:n])
-		disp.endWrite()
 	}
+	disp.endWrite()
 
 	return nil
 }
