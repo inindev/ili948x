@@ -26,7 +26,7 @@ type Ili948x struct {
 	cs     machine.Pin // spi chip select
 	dc     machine.Pin // tft data / command
 	bl     machine.Pin // tft backlight
-	rs     machine.Pin // tft reset
+	rst    machine.Pin // tft reset
 	width  uint16      // tft pixel width
 	height uint16      // tft pixel height
 	rot    Rotation    // tft orientation
@@ -36,7 +36,7 @@ type Ili948x struct {
 	y0, y1 uint16      //  CMD_PASET and CMD_CASET
 }
 
-func NewIli9488(trans iTransport, cs, dc, bl, rs machine.Pin, width, height uint16) *Ili948x {
+func NewIli9488(trans iTransport, cs, dc, bl, rst machine.Pin, width, height uint16) *Ili948x {
 	if width == 0 {
 		width = TFT_DEFAULT_WIDTH
 	}
@@ -49,7 +49,7 @@ func NewIli9488(trans iTransport, cs, dc, bl, rs machine.Pin, width, height uint
 		cs:     cs,
 		dc:     dc,
 		bl:     bl,
-		rs:     rs,
+		rst:    rst,
 		width:  width,
 		height: height,
 		rot:    Rot_0,
@@ -67,15 +67,21 @@ func NewIli9488(trans iTransport, cs, dc, bl, rs machine.Pin, width, height uint
 		cs.High()
 	}
 
+	// data/command pin
+	dc.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	dc.High()
+
 	// backlight pin
 	if bl != machine.NoPin {
 		bl.Configure(machine.PinConfig{Mode: machine.PinOutput})
 		bl.Low() // display off
 	}
 
-	// data/command pin
-	dc.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	dc.High()
+	// reset pin
+	if rst != machine.NoPin {
+		disp.rst.Configure(machine.PinConfig{Mode: machine.PinOutput})
+		disp.rst.High()
+	}
 
 	// reset the display
 	disp.Reset()
@@ -207,16 +213,13 @@ func (disp *Ili948x) SetBacklight(b bool) {
 	}
 }
 
-// Reset performs a hardware reset if rs pin present, otherwise performs a CMD_SWRESET software reset of the TFT display.
+// Reset performs a hardware reset if rst pin present, otherwise performs a CMD_SWRESET software reset of the TFT display.
 func (disp *Ili948x) Reset() {
-	if disp.rs != machine.NoPin {
+	if disp.rst != machine.NoPin {
 		// trigger hardware reset if there is one
-		disp.rs.Configure(machine.PinConfig{Mode: machine.PinOutput})
-		disp.rs.High()
+		disp.rst.Low()
 		time.Sleep(time.Millisecond * 100)
-		disp.rs.Low()
-		time.Sleep(time.Millisecond * 100)
-		disp.rs.High()
+		disp.rst.High()
 		time.Sleep(time.Millisecond * 200)
 	} else {
 		// if no hardware reset, send software reset
