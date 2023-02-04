@@ -158,19 +158,44 @@ func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.R
 	disp.setWindow(x, y, width, height)
 
 	disp.writeCmd(CMD_RAMWR)
-	buf := make([]byte, width*uint16(bpp/3))
-	disp.startWrite()
+	buf := make([]uint8, width*uint16(bpp/3))
 	for {
 		n, err := r.Read(buf)
 		if n == 0 || err == io.EOF {
 			break
 		}
 
+		disp.startWrite()
 		disp.trans.write8sl(buf[:n])
+		disp.endWrite()
 	}
-	disp.endWrite()
 
 	return nil
+}
+
+// SetScrollArea sets an area to scroll with fixed top/bottom or left/right parts of the display
+// Rotation affects scroll direction
+func (disp *Ili948x) SetScrollArea(topFixedArea, bottomFixedArea uint16) {
+	vertScrollArea := disp.height - topFixedArea - bottomFixedArea
+	disp.writeCmd(CMD_VSCRDEF,
+		uint8(topFixedArea>>8),
+		uint8(topFixedArea),
+		uint8(vertScrollArea>>8),
+		uint8(vertScrollArea),
+		uint8(bottomFixedArea>>8),
+		uint8(bottomFixedArea))
+}
+
+// SetScroll sets the vertical scroll address of the display.
+func (disp *Ili948x) SetScroll(line uint16) {
+	disp.writeCmd(CMD_VSCRSADD,
+		uint8(line>>8),
+		uint8(line))
+}
+
+// StopScroll returns the display to its normal state
+func (disp *Ili948x) StopScroll() {
+	disp.writeCmd(CMD_NORON)
 }
 
 // GetRotation returns the current rotation of the display.
@@ -233,20 +258,20 @@ func (disp *Ili948x) setWindow(x, y, w, h uint16) {
 	x1 := x + w - 1
 	if x != disp.x0 || x1 != disp.x1 {
 		disp.writeCmd(CMD_CASET,
-			byte(x>>8),
-			byte(x),
-			byte(x1>>8),
-			byte(x1),
+			uint8(x>>8),
+			uint8(x),
+			uint8(x1>>8),
+			uint8(x1),
 		)
 		disp.x0, disp.x1 = x, x1
 	}
 	y1 := y + h - 1
 	if y != disp.y0 || y1 != disp.y1 {
 		disp.writeCmd(CMD_PASET,
-			byte(y>>8),
-			byte(y),
-			byte(y1>>8),
-			byte(y1),
+			uint8(y>>8),
+			uint8(y),
+			uint8(y1>>8),
+			uint8(y1),
 		)
 		disp.y0, disp.y1 = y, y1
 	}
@@ -340,7 +365,7 @@ func (disp *Ili948x) init() {
 }
 
 // writeCmd issues a TFT command with optional data
-func (disp *Ili948x) writeCmd(cmd byte, data ...byte) {
+func (disp *Ili948x) writeCmd(cmd uint8, data ...uint8) {
 	disp.startWrite()
 
 	disp.dc.Low() // command mode
