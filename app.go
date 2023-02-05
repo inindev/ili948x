@@ -83,8 +83,28 @@ func main() {
 	disp.SetRotation(Rot_90)
 	disp.bitmapDemo("/logo.bmp")
 	time.Sleep(time.Second)
+
 	disp.SetRotation(Rot_270)
 	disp.bitmapDemo("/logo.bmp")
+
+	// scroll demo
+	tfa := uint16(15)
+	bfa := uint16(160)
+	disp.SetScrollArea(tfa, bfa)
+
+	for i := tfa + 1; i < 480-bfa; i++ {
+		disp.SetScroll(i)
+		time.Sleep(time.Millisecond * 25)
+	}
+	time.Sleep(time.Second)
+
+	for i := 480 - bfa - 1; i >= tfa; i-- {
+		disp.SetScroll(i)
+		time.Sleep(time.Millisecond * 25)
+	}
+	time.Sleep(time.Second)
+
+	disp.StopScroll()
 
 	for {
 		time.Sleep(time.Minute)

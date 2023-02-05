@@ -240,17 +240,16 @@ func (disp *Ili948x) SetBacklight(b bool) {
 
 // Reset performs a hardware reset if rst pin present, otherwise performs a CMD_SWRESET software reset of the TFT display.
 func (disp *Ili948x) Reset() {
+	// prefer a hardware reset if there is one
 	if disp.rst != machine.NoPin {
-		// trigger hardware reset if there is one
 		disp.rst.Low()
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 64) // datasheet says 10ms
 		disp.rst.High()
-		time.Sleep(time.Millisecond * 200)
 	} else {
 		// if no hardware reset, send software reset
 		disp.writeCmd(CMD_SWRESET)
-		time.Sleep(time.Millisecond * 150)
 	}
+	time.Sleep(time.Millisecond * 140) // datasheet says 120ms
 }
 
 // setWindow defines the output area for subsequent calls to CMD_RAMWR
@@ -329,10 +328,8 @@ func (disp *Ili948x) init() {
 		0x80, // VCM_REG_EN: true
 		0x40) // VCM_OUT
 
-	// TODO: is this correct?
 	disp.writeCmd(CMD_PIXFMT,
-		//		0x66}) // DPI/DBI: 18 bits / pixel
-		0x76) // DPI/DBI: 24 bits / pixel
+		0x66) // DPI/DBI: 18 bits / pixel
 
 	disp.writeCmd(CMD_FRMCTRL1,
 		0xa0, // FRS: 60.76  DIVA: 0
@@ -359,9 +356,7 @@ func (disp *Ili948x) init() {
 
 	disp.writeCmd(CMD_SLPOUT)
 	time.Sleep(time.Millisecond * 120)
-	disp.writeCmd(CMD_IDMOFF)
 	disp.writeCmd(CMD_DISON)
-	time.Sleep(time.Millisecond * 100)
 }
 
 // writeCmd issues a TFT command with optional data
