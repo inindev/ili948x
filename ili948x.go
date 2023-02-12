@@ -1,19 +1,9 @@
+//go:build tft_ili948x
+
 package main
 
 import (
-	"errors"
-	"io"
-	"machine"
 	"time"
-)
-
-type Rotation uint8
-
-const ( // clock-wise rotation
-	Rot_0   Rotation = iota // 320x480
-	Rot_90                  // 480x320
-	Rot_180                 // 320x480
-	Rot_270                 // 480x320
 )
 
 const (
@@ -21,367 +11,155 @@ const (
 	TFT_DEFAULT_HEIGHT uint16 = 480
 )
 
-type Ili948x struct {
-	trans  iTransport
-	cs     machine.Pin // spi chip select
-	dc     machine.Pin // tft data / command
-	bl     machine.Pin // tft backlight
-	rst    machine.Pin // tft reset
-	width  uint16      // tft pixel width
-	height uint16      // tft pixel height
-	rot    Rotation    // tft orientation
-	mirror bool        // mirror tft output
-	bgr    bool        // tft blue-green-red mode
-	x0, x1 uint16      // current address window for
-	y0, y1 uint16      //  CMD_PASET and CMD_CASET
-}
-
-func NewIli9488(trans iTransport, cs, dc, bl, rst machine.Pin, width, height uint16) *Ili948x {
-	if width == 0 {
-		width = TFT_DEFAULT_WIDTH
-	}
-	if height == 0 {
-		height = TFT_DEFAULT_HEIGHT
-	}
-
-	disp := &Ili948x{
-		trans:  trans,
-		cs:     cs,
-		dc:     dc,
-		bl:     bl,
-		rst:    rst,
-		width:  width,
-		height: height,
-		rot:    Rot_0,
-		mirror: false,
-		bgr:    false,
-		x0:     0,
-		x1:     0,
-		y0:     0,
-		y1:     0,
-	}
-
-	// chip select pin
-	if cs != machine.NoPin { // cs may be implemented by hardware spi
-		cs.Configure(machine.PinConfig{Mode: machine.PinOutput})
-		cs.High()
-	}
-
-	// data/command pin
-	dc.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	dc.High()
-
-	// backlight pin
-	if bl != machine.NoPin {
-		bl.Configure(machine.PinConfig{Mode: machine.PinOutput})
-		bl.Low() // display off
-	}
-
-	// reset pin
-	if rst != machine.NoPin {
-		disp.rst.Configure(machine.PinConfig{Mode: machine.PinOutput})
-		disp.rst.High()
-	}
-
-	// reset the display
-	disp.Reset()
-
-	// init display settings
-	disp.init()
-
-	// display backlight on
-	disp.SetBacklight(true)
-
-	return disp
-}
-
-// Size returns the current size of the display.
-func (disp *Ili948x) Size() (uint16, uint16) {
-	if disp.rot == Rot_0 || disp.rot == Rot_180 {
-		return disp.width, disp.height
-	}
-	return disp.height, disp.width
-}
-
-// DrawPixel draws a single pixel with the specified color.
-func (disp *Ili948x) DrawPixel(x, y uint16, color uint32) error {
-	return disp.FillRectangle(x, y, 1, 1, color)
-}
-
-// DrawHLine draws a horizontal line with the specified color.
-func (disp *Ili948x) DrawHLine(x0, x1, y uint16, color uint32) error {
-	if x0 > x1 {
-		x0, x1 = x1, x0
-	}
-	return disp.FillRectangle(x0, y, x1-x0+1, 1, color)
-}
-
-// DrawVLine draws a vertical line with the specified color.
-func (disp *Ili948x) DrawVLine(x, y0, y1 uint16, color uint32) error {
-	if y0 > y1 {
-		y0, y1 = y1, y0
-	}
-	return disp.FillRectangle(x, y0, 1, y1-y0+1, color)
-}
-
-// FillScreen fills the screen with the specified color.
-func (disp *Ili948x) FillScreen(color uint32) {
-	if disp.rot == Rot_0 || disp.rot == Rot_180 {
-		disp.FillRectangle(0, 0, disp.width, disp.height, color)
-	} else {
-		disp.FillRectangle(0, 0, disp.height, disp.width, color)
-	}
-}
-
-// FillRectangle fills a rectangle at given coordinates and dimensions with the specified color.
-func (disp *Ili948x) FillRectangle(x, y, width, height uint16, color uint32) error {
-	w, h := disp.Size()
-	if x >= w || (x+width) > w || y >= h || (y+height) > h {
-		return errors.New("rectangle coordinates outside display area")
-	}
-	disp.setWindow(x, y, width, height)
-
-	disp.writeCmd(CMD_RAMWR)
-	disp.startWrite()
-	disp.trans.write24n(color, int(width)*int(height))
-	disp.endWrite()
-
-	return nil
-}
-
-// DisplayBitmap renders the streamed image at given coordinates and dimensions.
-func (disp *Ili948x) DisplayBitmap(x, y, width, height uint16, bpp uint8, r io.Reader) error {
-	w, h := disp.Size()
-	if x >= w || (x+width) > w || y >= h || (y+height) > h {
-		return errors.New("rectangle coordinates outside display area")
-	}
-	disp.setWindow(x, y, width, height)
-
-	disp.writeCmd(CMD_RAMWR)
-	buf := make([]uint8, width*uint16(bpp/3))
-	for {
-		n, err := r.Read(buf)
-		if n == 0 || err == io.EOF {
-			break
-		}
-
-		disp.startWrite()
-		disp.trans.write8sl(buf[:n])
-		disp.endWrite()
-	}
-
-	return nil
-}
-
-// SetScrollArea sets an area to scroll with fixed top/bottom or left/right parts of the display
-// Rotation affects scroll direction
-func (disp *Ili948x) SetScrollArea(topFixedArea, bottomFixedArea uint16) {
-	vertScrollArea := disp.height - topFixedArea - bottomFixedArea
-	disp.writeCmd(CMD_VSCRDEF,
-		uint8(topFixedArea>>8),
-		uint8(topFixedArea),
-		uint8(vertScrollArea>>8),
-		uint8(vertScrollArea),
-		uint8(bottomFixedArea>>8),
-		uint8(bottomFixedArea))
-}
-
-// SetScroll sets the vertical scroll address of the display.
-func (disp *Ili948x) SetScroll(line uint16) {
-	disp.writeCmd(CMD_VSCRSADD,
-		uint8(line>>8),
-		uint8(line))
-}
-
-// StopScroll returns the display to its normal state
-func (disp *Ili948x) StopScroll() {
-	disp.writeCmd(CMD_NORON)
-}
-
-// GetRotation returns the current rotation of the display.
-func (disp *Ili948x) GetRotation() Rotation {
-	return disp.rot
-}
-
-// SetRotation sets the clock-wise rotation of the display.
-func (disp *Ili948x) SetRotation(rot Rotation) {
-	disp.rot = rot
-	disp.updateMadctl()
-}
-
-// GetMirror returns true if the display set to display a mirrored image.
-func (disp *Ili948x) GetMirror() bool {
-	return disp.mirror
-}
-
-// SetMirror switches the display between mirrored image and non-mirrored image mode.
-func (disp *Ili948x) SetMirror(mirror bool) {
-	disp.mirror = mirror
-	disp.updateMadctl()
-}
-
-// GetBGR returns true if the display is in blue-green-red (BGR) mode.
-func (disp *Ili948x) GetBGR() bool {
-	return disp.bgr
-}
-
-// SetBGR switches the display between blue-green-red (BGR) and red-green-blue (RGB) mode.
-func (disp *Ili948x) SetBGR(bgr bool) {
-	disp.bgr = bgr
-	disp.updateMadctl()
-}
-
-// SetBacklight turns the TFT backlight on / off.
-func (disp *Ili948x) SetBacklight(b bool) {
-	if disp.bl != machine.NoPin {
-		disp.bl.Set(b)
-	}
-}
-
-// Reset performs a hardware reset if rst pin present, otherwise performs a CMD_SWRESET software reset of the TFT display.
-func (disp *Ili948x) Reset() {
-	// prefer a hardware reset if there is one
-	if disp.rst != machine.NoPin {
-		disp.rst.Low()
-		time.Sleep(time.Millisecond * 64) // datasheet says 10ms
-		disp.rst.High()
-	} else {
-		// if no hardware reset, send software reset
-		disp.writeCmd(CMD_SWRESET)
-	}
-	time.Sleep(time.Millisecond * 140) // datasheet says 120ms
-}
-
-// setWindow defines the output area for subsequent calls to CMD_RAMWR
-func (disp *Ili948x) setWindow(x, y, w, h uint16) {
-	x1 := x + w - 1
-	if x != disp.x0 || x1 != disp.x1 {
-		disp.writeCmd(CMD_CASET,
-			uint8(x>>8),
-			uint8(x),
-			uint8(x1>>8),
-			uint8(x1),
-		)
-		disp.x0, disp.x1 = x, x1
-	}
-	y1 := y + h - 1
-	if y != disp.y0 || y1 != disp.y1 {
-		disp.writeCmd(CMD_PASET,
-			uint8(y>>8),
-			uint8(y),
-			uint8(y1>>8),
-			uint8(y1),
-		)
-		disp.y0, disp.y1 = y, y1
-	}
-}
-
-// updateMadctl updates CMD_MADCTRL based settings (mirror, rotation, RGB/BGR)
-func (disp *Ili948x) updateMadctl() {
-	madctl := uint8(0)
-
-	if !disp.mirror {
-		// regular
-		switch disp.rot {
-		case Rot_0:
-			madctl = 0
-		case Rot_90:
-			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MV
-		case Rot_180:
-			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML
-		case Rot_270:
-			madctl = MADCTRL_MV | MADCTRL_MY | MADCTRL_ML
-		}
-	} else {
-		// mirrored
-		switch disp.rot {
-		case Rot_0:
-			madctl = MADCTRL_MX | MADCTRL_MH
-		case Rot_90:
-			madctl = MADCTRL_MX | MADCTRL_MH | MADCTRL_MY | MADCTRL_ML | MADCTRL_MV
-		case Rot_180:
-			madctl = MADCTRL_MY | MADCTRL_ML
-		case Rot_270:
-			madctl = MADCTRL_MV
-		}
-	}
-
-	if disp.bgr {
-		madctl |= MADCTRL_BGR
-	}
-
-	disp.writeCmd(CMD_MADCTRL, madctl)
-}
-
-// init performs base-level initialization and setup of the TFT display
-func (disp *Ili948x) init() {
-	disp.writeCmd(CMD_PWCTRL1,
+// init performs base-level initialization and setup of the Ili948x TFT display
+func (tft *TFTPanel) initPanel() {
+	tft.writeCmd(CMD_PWCTRL1,
 		0x17, // VREG1OUT:  5.0000
 		0x15) // VREG2OUT: -4.8750
 
-	disp.writeCmd(CMD_PWCTRL2,
+	tft.writeCmd(CMD_PWCTRL2,
 		0x41) // VGH: VCI x 6  VGL: -VCI x 4
 
-	disp.writeCmd(CMD_VMCTRL,
+	tft.writeCmd(CMD_VMCTRL,
 		0x00, // nVM
 		0x12, // VCM_REG:    -1.71875
 		0x80, // VCM_REG_EN: true
 		0x40) // VCM_OUT
 
-	disp.writeCmd(CMD_PIXFMT,
+	tft.writeCmd(CMD_PIXFMT,
 		0x66) // DPI/DBI: 18 bits / pixel
 
-	disp.writeCmd(CMD_FRMCTRL1,
+	tft.writeCmd(CMD_FRMCTRL1,
 		0xa0, // FRS: 60.76  DIVA: 0
 		0x11) // RTNA: 17 clocks
 
-	disp.writeCmd(CMD_INVCTRL,
+	tft.writeCmd(CMD_INVCTRL,
 		0x02) // DINV: 2 dot inversion
 
-	disp.writeCmd(CMD_DISCTRL,
+	tft.writeCmd(CMD_DISCTRL,
 		0x02, // PT: AGND
 		0x22, // SS: S960 -> S1  ISC: 5 frames
 		0x3b) // NL: 8 * (3b + 1) = 480 lines
 
-	disp.writeCmd(CMD_ETMOD,
+	tft.writeCmd(CMD_ETMOD,
 		0xc6) // EPF: 11 (db5 -> r0,g0,b0)
 
-	disp.writeCmd(CMD_ADJCTRL3,
+	tft.writeCmd(CMD_ADJCTRL3,
 		0xa9, //
 		0x51, //
 		0x2c, //
 		0x82) // DSI_18_option:
 
-	disp.updateMadctl()
+	tft.updateMadctl()
 
-	disp.writeCmd(CMD_SLPOUT)
+	tft.writeCmd(CMD_SLPOUT)
 	time.Sleep(time.Millisecond * 120)
-	disp.writeCmd(CMD_DISON)
+	tft.writeCmd(CMD_DISON)
 }
 
-// writeCmd issues a TFT command with optional data
-func (disp *Ili948x) writeCmd(cmd uint8, data ...uint8) {
-	disp.startWrite()
+const ( // ILI9488 Datasheet, pp. 140-147
+	CMD_NOP     uint8 = 0x00 // No Operation
+	CMD_SWRESET       = 0x01 // Software Reset
 
-	disp.dc.Low() // command mode
-	disp.trans.write8(cmd)
+	CMD_RDDIDIF    = 0x04 // Read Display Identification Information
+	CMD_RDNUMED    = 0x05 // Read Number of the Errors on DSI
+	CMD_RDDST      = 0x09 // Read Display Status
+	CMD_RDDPM      = 0x0a // Read Display Power Mode
+	CMD_RDDMADCTRL = 0x0b // Read Display MADCTRL
+	CMD_RDDCOLMOD  = 0x0c // Read Display Pixel Format
+	CMD_RDDIM      = 0x0d // Read Display Image Mode
+	CMD_RDDSM      = 0x0e // Read Display Signal Mode
+	CMD_RDDSDR     = 0x0f // Read Display Self-Diagnostic Result
 
-	disp.dc.High() // data mode
-	disp.trans.write8sl(data)
+	CMD_SLPIN   = 0x10 // Enter Sleep Mode
+	CMD_SLPOUT  = 0x11 // Sleep Out
+	CMD_PTLON   = 0x12 // Partial Mode ON
+	CMD_NORON   = 0x13 // Normal Display Mode ON
+	CMD_INVOFF  = 0x20 // Display Inversion OFF
+	CMD_INVON   = 0x21 // Display Inversion ON
+	CMD_ALLPOFF = 0x22 // All Pixels OFF
+	CMD_ALLPON  = 0x23 // All Pixels ON
+	CMD_DISOFF  = 0x28 // Display OFF
+	CMD_DISON   = 0x29 // Display ON
 
-	disp.endWrite()
-}
+	CMD_CASET    = 0x2a // Column Address Set
+	CMD_PASET    = 0x2b // Page Address Set
+	CMD_RAMWR    = 0x2c // Memory Write
+	CMD_RAMRD    = 0x2e // Memory Read
+	CMD_PLTAR    = 0x30 // Partial Area
+	CMD_VSCRDEF  = 0x33 // Vertical Scrolling Definition
+	CMD_TEOFF    = 0x34 // Tearing Effect Line OFF
+	CMD_TEON     = 0x35 // Tearing Effect Line ON
+	CMD_MADCTRL  = 0x36 // Memory Access Control
+	CMD_VSCRSADD = 0x37 // Vertical Scrolling Start Address
+	CMD_IDMOFF   = 0x38 // Idle Mode OFF
+	CMD_IDMON    = 0x39 // Idle Mode ON
+	CMD_PIXFMT   = 0x3a // COLMOD: Interface Pixel Format
+	CMD_RAMWRC   = 0x3c // Memory Write Continue
+	CMD_RAMRDRC  = 0x3e // Memory Read Continue
+	CMD_TESLWR   = 0x44 // Write Tear Scan Line
+	CMD_TESLRD   = 0x45 // Read Tear Scan Line
+	CMD_WRDISBV  = 0x51 // Write Display Brightness Value
+	CMD_RDDISBV  = 0x52 // Read Display Brightness Value
+	CMD_WRCTRLD  = 0x53 // Write CTRL Display Value
+	CMD_RDCTRLD  = 0x54 // Read CTRL Display Value
+	CMD_WRCABC   = 0x55 // Write Content Adaptive Brightness Control Value
+	CMD_RDCABC   = 0x56 // Read Content Adaptive Brightness Control Value
+	CMD_WRCABCMB = 0x5e // Write CABC Minimum Brightness
+	CMD_RDCABCMB = 0x5f // Read CABC Minimum Brightness
+	CMD_RDABCSDR = 0x68 // Read Automatic Brightness Control Self-diagnostic Result
 
-//go:inline
-func (disp *Ili948x) startWrite() {
-	if disp.cs != machine.NoPin {
-		disp.cs.Low()
-	}
-}
+	CMD_IFMODE   = 0xb0 // Interface Mode Control
+	CMD_FRMCTRL1 = 0xb1 // Frame Rate Control (In Normal Mode/Full Colors)
+	CMD_FRMCTRL2 = 0xb2 // Frame Rate Control (In Idle Mode/8 colors)
+	CMD_FRMCTRL3 = 0xb3 // Frame Rate control (In Partial Mode/Full Colors)
+	CMD_INVCTRL  = 0xb4 // Display Inversion Control
+	CMD_PRCTRL   = 0xb5 // Blanking Porch Control
+	CMD_DISCTRL  = 0xb6 // Display Function Control
+	CMD_ETMOD    = 0xb7 // Entry Mode Set
+	CMD_CECTRL1  = 0xb9 // Color Enhancement Control 1
+	CMD_CECTRL2  = 0xba // Color Enhancement Control 2
+	CMD_HSLCTRL  = 0xbe // HS Lanes Control
 
-//go:inline
-func (disp *Ili948x) endWrite() {
-	if disp.cs != machine.NoPin {
-		disp.cs.High()
-	}
-}
+	CMD_PWCTRL1   = 0xc0 // Power Control 1
+	CMD_PWCTRL2   = 0xc1 // Power Control 2
+	CMD_PWCTRL3   = 0xc2 // Power Control 3 (for Normal Mode)
+	CMD_PWCTRL4   = 0xc3 // Power Control 4 (for Idle Mode)
+	CMD_PWCTRL5   = 0xc4 // Power Control 5 (for Partial Mode)
+	CMD_VMCTRL    = 0xc5 // VCOM Control
+	CMD_CABCCTRL1 = 0xc6 // CABC Control 1
+	CMD_CABCCTRL2 = 0xc8 // CABC Control 2
+	CMD_CABCCTRL3 = 0xc9 // CABC Control 3
+	CMD_CABCCTRL4 = 0xca // CABC Control 4
+	CMD_CABCCTRL5 = 0xcb // CABC Control 5
+	CMD_CABCCTRL6 = 0xcc // CABC Control 6
+	CMD_CABCCTRL7 = 0xcd // CABC Control 7
+	CMD_CABCCTRL8 = 0xce // CABC Control 8
+	CMD_CABCCTRL9 = 0xcf // CABC Control 9
+
+	CMD_NVMWR     = 0xd0 // NV Memory Write
+	CMD_NVMPKEY   = 0xd1 // NV Memory Protection Key
+	CMD_NVMSRD    = 0xd2 // NV Memory Status Read
+	CMD_RDID4     = 0xd3 // Read ID4
+	CMD_ADJCTRL1  = 0xd7 // Adjust Control 1
+	CMD_PGAMCTRL  = 0xe0 // Positive Gamma Control
+	CMD_NGAMCTRL  = 0xe1 // Negative Gamma Control
+	CMD_DGAMCTRL1 = 0xe2 // Ditigal Gamma Control 1
+	CMD_DGAMCTRL2 = 0xe3 // Ditigal Gamma Control 2
+	CMD_SETIMAGE  = 0xe9 // Set Image Function
+	CMD_ADJCTRL2  = 0xf2 // Adjust Control 2
+	CMD_ADJCTRL3  = 0xf7 // Adjust Control 3
+	CMD_ADJCTRL4  = 0xf8 // Adjust Control 4
+	CMD_ADJCTRL5  = 0xf9 // Adjust Control 5
+	CMD_SPIRDCMDS = 0xfb // SPI Read Command Setting
+	CMD_ADJCTRL6  = 0xfc // Adjust Control 6
+)
+
+const (
+	MADCTRL_MY  uint8 = 0x80 // Row Address Order         1 = address bottom to top
+	MADCTRL_MX        = 0x40 // Column Address Order      1 = address right to left
+	MADCTRL_MV        = 0x20 // Row/Column Exchange       1 = mirror and rotate 90 ccw
+	MADCTRL_ML        = 0x10 // Vertical Refresh Order    1 = refresh bottom to top
+	MADCTRL_BGR       = 0x08 // RGB-BGR Order             1 = Blue-Green-Red pixel order
+	MADCTRL_MH        = 0x04 // Horizontal Refresh Order  1 = refresh right to left
+)
